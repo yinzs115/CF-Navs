@@ -25,6 +25,7 @@ INIT_ADMIN_USER = "admin"
 #   RESET_ADMIN_CREDENTIALS = "reset-2026-07-12"
 # Token 有效期（秒），默认 30 天；可在 Cloudflare 环境变量中按环境覆盖。
 SESSION_TTL = "2592000"
+SITE_PASSWORD = "135" 
 
 [[d1_databases]]
 binding = "DB"
