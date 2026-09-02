@@ -18,12 +18,19 @@ import type { HonoEnv } from './types'
 
 const app = new Hono<HonoEnv>()
 
+// ===== 测试标记：确认 Worker 是否执行 =====
+app.use('*', async (c, next) => {
+  console.log(`[GATE] ${c.req.method} ${new URL(c.req.url).pathname}`)
+  await next()
+})
+// ===== 测试标记结束 =====
+
 app.get('/api/health', (c) => c.json(ok({ status: 'ok' })))
 
 app.route('/api', authRoutes)
 app.route('/api', installRoutes)
 app.route('/api', publicRoutes)
-app.route('/api', errorReportRoutes) // 公开错误上报，无需认证
+app.route('/api', errorReportRoutes)
 
 app.use('/api/admin', authRequired)
 app.use('/api/admin/*', authRequired)
@@ -38,11 +45,9 @@ app.use('/api/bookmarks/*', authRequired)
 app.route('/api/bookmarks', bookmarksRoutes)
 
 app.use('/api/fetch-favicon', authRequired)
-// 精确路径中间件，没有通配符：新增同文件路由时必须补一行，否则接口是公开的。
 app.use('/api/fetch-site-meta', authRequired)
 app.route('/api', faviconRoutes)
 
-// /api/icon/:id 公开（不须认证），用于前台加载缓存图标
 app.use('/api/iconify-search', authRequired)
 app.route('/api', iconRoutes)
 
@@ -53,7 +58,7 @@ app.route('/api/settings', settingsRoutes)
 app.use('/api/import', authRequired)
 app.route('/api', dataRoutes)
 
-// ========== 入口密码保护 ==========
+// ========== 入口密码保护 v2 ==========
 const LOGIN_HTML = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -66,6 +71,7 @@ const LOGIN_HTML = `<!DOCTYPE html>
     .box{background:#1e293b;padding:2.5rem;border-radius:1rem;box-shadow:0 25px 50px -12px rgba(0,0,0,0.5);width:100%;max-width:360px;text-align:center}
     h2{color:#f8fafc;margin-bottom:.5rem;font-size:1.5rem}
     p{color:#94a3b8;margin-bottom:1.5rem;font-size:.875rem}
+    .ver{color:#64748b;margin-bottom:1rem;font-size:.75rem}
     input{width:100%;padding:.75rem 1rem;margin-bottom:1rem;border:1px solid #334155;border-radius:.5rem;background:#0f172a;color:#f8fafc;font-size:1rem;outline:none;transition:border-color .2s}
     input:focus{border-color:#3b82f6}
     button{width:100%;padding:.75rem;border:none;border-radius:.5rem;background:#3b82f6;color:#fff;font-size:1rem;font-weight:500;cursor:pointer;transition:background .2s}
@@ -76,6 +82,7 @@ const LOGIN_HTML = `<!DOCTYPE html>
 <body>
   <div class="box">
     <h2>🔒 访问验证</h2>
+    <p class="ver">v2.0 | 强制密码保护</p>
     <p>请输入密码继续访问</p>
     <form method="POST" action="">
       <input type="password" name="password" placeholder="密码" required autofocus>
@@ -89,16 +96,22 @@ const LOGIN_HTML = `<!DOCTYPE html>
 
 app.use('*', async (c, next) => {
   const url = new URL(c.req.url)
-  const password = c.env.SITE_PASSWORD
 
-  // 没设密码直接放行（方便本地开发）
-  if (!password) return next()
+  // 优先读取环境变量，fallback 硬编码密码（确保绝对生效）
+  const envPwd = c.env.SITE_PASSWORD
+  const password = envPwd || 'fanxy2026'
 
-  // API 接口放行
-  if (url.pathname.startsWith('/api/')) return next()
+  console.log(`[GATE] envPwd=${envPwd ? '有(' + envPwd.length + ')' : '无'} | 使用=${envPwd ? '环境变量' : '硬编码'} | path=${url.pathname}`)
+
+  // API 放行
+  if (url.pathname.startsWith('/api/')) {
+    console.log('[GATE] API 放行')
+    return next()
+  }
 
   // 静态资源放行
   if (url.pathname.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|json|map|webmanifest)$/)) {
+    console.log('[GATE] 静态资源放行')
     return next()
   }
 
@@ -106,15 +119,19 @@ app.use('*', async (c, next) => {
   const authCookie = `site_auth=${btoa(password)}`
   const isAuthed = cookie.includes(authCookie)
 
+  console.log(`[GATE] isAuthed=${isAuthed} | cookie=${cookie.includes('site_auth')}`)
+
   // POST 提交密码
   if (c.req.method === 'POST' && !isAuthed) {
     const formData = await c.req.formData()
     const inputPwd = formData.get('password') as string
+    console.log(`[GATE] POST 密码=${inputPwd === password ? '正确' : '错误'}`)
 
     if (inputPwd === password) {
       const response = await c.env.ASSETS.fetch(c.req.raw)
       const newHeaders = new Headers(response.headers)
       newHeaders.set('Set-Cookie', `${authCookie}; Path=/; HttpOnly; Secure; SameSite=Strict`)
+      console.log('[GATE] 设置 Cookie 放行')
       return new Response(response.body, {
         status: response.status,
         statusText: response.statusText,
@@ -129,10 +146,12 @@ app.use('*', async (c, next) => {
     })
   }
 
-  // 已认证，放行
-  if (isAuthed) return next()
+  if (isAuthed) {
+    console.log('[GATE] 已认证放行')
+    return next()
+  }
 
-  // 未认证，返回登录页
+  console.log('[GATE] 返回登录页')
   return c.html(LOGIN_HTML, 200, {
     'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
     'Pragma': 'no-cache',
@@ -143,11 +162,9 @@ app.use('*', async (c, next) => {
 
 app.onError((err, c) => {
   console.error(err)
-
   if (new URL(c.req.url).pathname.startsWith('/api/')) {
     return c.json(fail(ErrCode.SERVER_ERROR, 'internal server error'))
   }
-
   return new Response('Internal Server Error', { status: 500 })
 })
 
@@ -155,7 +172,6 @@ app.all('*', async (c) => {
   if (new URL(c.req.url).pathname.startsWith('/api/')) {
     return c.json(fail(ErrCode.NOT_FOUND, 'not found'))
   }
-
   const response = await c.env.ASSETS.fetch(c.req.raw)
   return withAssetCacheHeaders(c.req.raw, response)
 })
