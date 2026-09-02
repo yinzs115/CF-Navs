@@ -1,7 +1,7 @@
 name = "cf-navs"
 main = "worker/index.ts"
 compatibility_date = "2025-06-01"
-compatibility_flags = ["nodejs_compat"]
+compatibility_flags = ["nodejs_compat_v2"]
 keep_vars = true
 
 # 将安装器使用的 schema.sql 作为文本模块打包进 Worker。
