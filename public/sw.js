@@ -8,7 +8,7 @@
 
 const CACHE = 'cf-navs-v15'
 const RUNTIME_CACHE_PREFIX = 'cf-navs-v'
-const APP_SHELL = ['/index.html', '/manifest.webmanifest', '/icon.ico', '/icon.png']
+const APP_SHELL = ['/manifest.webmanifest', '/icon.ico', '/icon.png']
 const ICON_FALLBACK_TTL_MS = 5 * 60 * 1000
 const ICON_FALLBACK_CACHED_AT = 'X-CF-Navs-Fallback-Cached-At'
 const MAX_ICON_CACHE_BYTES = 512 * 1024
@@ -165,34 +165,12 @@ self.addEventListener('fetch', (event) => {
 
   if (url.pathname.startsWith('/api/')) return
 
-  // 导航请求：stale-while-revalidate。
-  //
-  // 之前是 network-first，加上 HTML 的 `no-cache, must-revalidate`，等于每次打开
-  // 页面都必须先等一个完整网络往返才能开始渲染，本地缓存只在离线时才用得上。
-  //
-  // 代价：部署新版本后用户下一次打开看到的仍是旧版，再刷一次才更新。因为
-  // /assets/* 是 hash 文件名且同样被缓存，旧 HTML 引用的旧 JS/CSS 仍然取得到，
-  // 不会白屏。检测到新版本时会通知页面，由页面决定怎么提示。
+  // 导航请求绝不从 Cache Storage 直接返回。
+  // 入口密码由 Worker 在每次导航请求时验证；如果这里直接命中缓存，
+  // 新的浏览器会话可能绕过密码页面。静态 JS/CSS/图片仍然可以正常缓存。
   if (request.mode === 'navigate') {
     event.respondWith(
-      caches.match(SHELL_URL).then((cached) => {
-        const network = fetch(request)
-          .then(async (response) => {
-            if (response.ok && response.headers.get('content-type')?.includes('text/html')) {
-              const changed = cached ? await shellChanged(cached, response) : true
-              cacheResponse(SHELL_URL, response)
-              if (cached && changed) notifyClients({ type: 'shell-updated' })
-            }
-            return response
-          })
-          .catch(() => cached || caches.match('/'))
-
-        if (!cached) return network
-
-        // 后台更新不能让请求悬空：respondWith 之后 waitUntil 保活。
-        event.waitUntil(network.catch(() => undefined))
-        return cached
-      }),
+      fetch(request).catch(() => caches.match('/index.html')),
     )
     return
   }
