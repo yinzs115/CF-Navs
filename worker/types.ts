@@ -11,6 +11,7 @@ export interface Env {
   RESET_ADMIN_CREDENTIALS?: string
   SETUP_TOKEN?: string
   SESSION_TTL: string
+  SITE_PASSWORD?: string
 }
 
 // Hono context.set/get 的类型
