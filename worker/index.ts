@@ -110,11 +110,14 @@ function loginPage(error = false): Response {
 app.use('*', async (c, next) => {
   const url = new URL(c.req.url)
 
-  // ✅ 放行后台登录和安装相关接口（这些接口有自己的认证逻辑）
-  const publicPaths = ['/api/health', '/api/auth/login', '/api/install', '/api/setup']
-  if (publicPaths.includes(url.pathname)) {
+  // ✅ 所有 /api/* 路径完全放行（后台接口不受网站密码保护）
+  if (url.pathname.startsWith('/api/')) {
     return next()
   }
+
+  // 静态资源可以公开加载
+  const isStaticAsset = url.pathname.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|json|map|webmanifest)$/i)
+  if (isStaticAsset) return next()
 
   const password = c.env.SITE_PASSWORD
   if (!password) {
@@ -127,10 +130,6 @@ app.use('*', async (c, next) => {
   const expectedToken = await createSiteAuthToken(password)
   const currentToken = getCookie(c.req.raw, SITE_AUTH_COOKIE)
   const isAuthed = currentToken === expectedToken
-
-  // 静态资源可以公开加载
-  const isStaticAsset = url.pathname.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|json|map|webmanifest)$/i)
-  if (isStaticAsset) return next()
 
   // 已认证用户的 POST 请求 → 重定向到首页
   if (isAuthed && c.req.method === 'POST') {
