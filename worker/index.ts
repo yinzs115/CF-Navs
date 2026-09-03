@@ -21,7 +21,6 @@ import type { HonoEnv } from './types'
 const app = new Hono<HonoEnv>()
 
 // ========== 网站入口密码保护 ==========
-// 密码通过 Cloudflare Secret 注入：SITE_PASSWORD
 const SITE_AUTH_COOKIE = 'site_auth'
 const SITE_AUTH_PAYLOAD = 'cf-navs-site-access-v1'
 const LOGIN_HTML = `<!DOCTYPE html>
@@ -111,8 +110,11 @@ function loginPage(error = false): Response {
 app.use('*', async (c, next) => {
   const url = new URL(c.req.url)
 
-  // 健康检查保留公开访问
-  if (url.pathname === '/api/health') return next()
+  // ✅ 放行后台登录和安装相关接口（这些接口有自己的认证逻辑）
+  const publicPaths = ['/api/health', '/api/auth/login', '/api/install', '/api/setup']
+  if (publicPaths.includes(url.pathname)) {
+    return next()
+  }
 
   const password = c.env.SITE_PASSWORD
   if (!password) {
@@ -126,13 +128,11 @@ app.use('*', async (c, next) => {
   const currentToken = getCookie(c.req.raw, SITE_AUTH_COOKIE)
   const isAuthed = currentToken === expectedToken
 
-  // 静态资源可以公开加载（JS/CSS/图片等）
+  // 静态资源可以公开加载
   const isStaticAsset = url.pathname.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|json|map|webmanifest)$/i)
   if (isStaticAsset) return next()
 
-  // ========== 关键修复：处理已认证用户的 POST 请求 ==========
-  // 如果已经认证，但请求方法是 POST（可能是刷新页面重复提交表单）
-  // 直接重定向到首页，避免 405 错误
+  // 已认证用户的 POST 请求 → 重定向到首页
   if (isAuthed && c.req.method === 'POST') {
     return new Response(null, {
       status: 303,
@@ -143,18 +143,16 @@ app.use('*', async (c, next) => {
     })
   }
 
-  // 已认证 → 放行所有 GET 请求
+  // 已认证 → 放行
   if (isAuthed) return next()
 
-  // ========== 未认证用户处理 ==========
-  // POST 请求 → 处理登录表单提交
+  // POST 请求 → 处理登录表单
   if (c.req.method === 'POST') {
     const formData = await c.req.formData().catch(() => null)
     const inputPassword = formData?.get('password')
     
     if (typeof inputPassword === 'string' && inputPassword === password) {
       const token = await createSiteAuthToken(password)
-      // 密码正确：设置 Session Cookie，重定向到首页
       return new Response(null, {
         status: 303,
         headers: {
@@ -164,7 +162,6 @@ app.use('*', async (c, next) => {
         },
       })
     }
-    // 密码错误
     return loginPage(true)
   }
 
