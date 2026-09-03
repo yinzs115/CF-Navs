@@ -1,7 +1,5 @@
 // worker/index.ts
 
-// ✅ 删除 import { authMiddleware } from './auth'; 这一行，因为下面已经有完整的验证逻辑了
-
 import { Hono } from 'hono'
 import { ErrCode } from '../shared/types'
 import { withAssetCacheHeaders } from './lib/assetHeaders'
@@ -23,8 +21,8 @@ import type { HonoEnv } from './types'
 const app = new Hono<HonoEnv>()
 
 // ========== 网站入口密码保护 ==========
-// 密码通过 Cloudflare Secret 注入：SITE_PASSWORD。
-// 不把密码写进前端，也不把明文密码写入 Cookie。
+// 密码通过 Cloudflare Secret 注入：SITE_PASSWORD
+// 使用 Session Cookie（无过期时间），关闭浏览器后需要重新输入
 const SITE_AUTH_COOKIE = 'site_auth'
 const SITE_AUTH_PAYLOAD = 'cf-navs-site-access-v1'
 const LOGIN_HTML = `<!DOCTYPE html>
@@ -51,7 +49,7 @@ const LOGIN_HTML = `<!DOCTYPE html>
   <div class="box">
     <h2>🔒 访问验证</h2>
     <p>请输入访问密码继续</p>
-    <form method="POST">
+    <form method="POST" action="/">
       <input type="password" name="password" placeholder="请输入密码" autocomplete="current-password" required autofocus>
       <button type="submit">进入网站</button>
     </form>
@@ -94,16 +92,10 @@ function getCookie(request: Request, name: string): string | null {
   return null
 }
 
-function safeNextPath(pathname: string): string {
-  // 只允许站内绝对路径，防止利用登录流程做开放重定向。
-  if (!pathname.startsWith('/') || pathname.startsWith('//')) return '/'
-  return pathname || '/'
-}
-
 function loginPage(error = false): Response {
   const html = LOGIN_HTML.replace(
     '{{ERROR}}',
-    error ? '<div class="error">密码错误，请重新输入</div>' : '',
+    error ? '<div class="error">❌ 密码错误，请重新输入</div>' : '',
   )
   return new Response(html, {
     status: 200,
@@ -116,10 +108,11 @@ function loginPage(error = false): Response {
   })
 }
 
+// ========== 认证中间件 ==========
 app.use('*', async (c, next) => {
   const url = new URL(c.req.url)
 
-  // 健康检查保留公开访问，方便 Cloudflare / 监控检查 Worker 是否正常。
+  // 健康检查保留公开访问
   if (url.pathname === '/api/health') return next()
 
   const password = c.env.SITE_PASSWORD
@@ -134,32 +127,35 @@ app.use('*', async (c, next) => {
   const currentToken = getCookie(c.req.raw, SITE_AUTH_COOKIE)
   const isAuthed = currentToken === expectedToken
 
+  // ✅ 已认证 → 放行所有请求
   if (isAuthed) return next()
 
-  // 静态 JS/CSS/图片可以公开加载；真正的 HTML 导航请求必须经过验证。
-  // API 不在这里绕过，避免别人直接调用 API 获取导航数据。
+  // 静态资源可以公开加载（JS/CSS/图片等）
   const isStaticAsset = url.pathname.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|json|map|webmanifest)$/i)
   if (isStaticAsset) return next()
 
+  // ✅ POST 请求 → 处理登录表单提交
   if (c.req.method === 'POST') {
     const formData = await c.req.formData().catch(() => null)
     const inputPassword = formData?.get('password')
+    
     if (typeof inputPassword === 'string' && inputPassword === password) {
       const token = await createSiteAuthToken(password)
-      const redirectPath = safeNextPath(url.pathname)
+      // 密码正确：设置 Session Cookie（无过期时间），重定向到首页
       return new Response(null, {
         status: 303,
         headers: {
-          Location: redirectPath,
-          // 没有 Max-Age/Expires，因此这是会话 Cookie；关闭浏览器后需要重新输入。
+          Location: '/',
           'Set-Cookie': `${SITE_AUTH_COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Strict`,
           'Cache-Control': 'no-store',
         },
       })
     }
+    // 密码错误
     return loginPage(true)
   }
 
+  // ✅ GET 请求且未认证 → 显示登录页
   return loginPage()
 })
 // ========== 网站入口密码保护结束 ==========
