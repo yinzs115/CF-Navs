@@ -22,7 +22,6 @@ const app = new Hono<HonoEnv>()
 
 // ========== 网站入口密码保护 ==========
 // 密码通过 Cloudflare Secret 注入：SITE_PASSWORD
-// 使用 Session Cookie（无过期时间），关闭浏览器后需要重新输入
 const SITE_AUTH_COOKIE = 'site_auth'
 const SITE_AUTH_PAYLOAD = 'cf-navs-site-access-v1'
 const LOGIN_HTML = `<!DOCTYPE html>
@@ -127,21 +126,35 @@ app.use('*', async (c, next) => {
   const currentToken = getCookie(c.req.raw, SITE_AUTH_COOKIE)
   const isAuthed = currentToken === expectedToken
 
-  // ✅ 已认证 → 放行所有请求
-  if (isAuthed) return next()
-
   // 静态资源可以公开加载（JS/CSS/图片等）
   const isStaticAsset = url.pathname.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|json|map|webmanifest)$/i)
   if (isStaticAsset) return next()
 
-  // ✅ POST 请求 → 处理登录表单提交
+  // ========== 关键修复：处理已认证用户的 POST 请求 ==========
+  // 如果已经认证，但请求方法是 POST（可能是刷新页面重复提交表单）
+  // 直接重定向到首页，避免 405 错误
+  if (isAuthed && c.req.method === 'POST') {
+    return new Response(null, {
+      status: 303,
+      headers: {
+        Location: '/',
+        'Cache-Control': 'no-store',
+      },
+    })
+  }
+
+  // 已认证 → 放行所有 GET 请求
+  if (isAuthed) return next()
+
+  // ========== 未认证用户处理 ==========
+  // POST 请求 → 处理登录表单提交
   if (c.req.method === 'POST') {
     const formData = await c.req.formData().catch(() => null)
     const inputPassword = formData?.get('password')
     
     if (typeof inputPassword === 'string' && inputPassword === password) {
       const token = await createSiteAuthToken(password)
-      // 密码正确：设置 Session Cookie（无过期时间），重定向到首页
+      // 密码正确：设置 Session Cookie，重定向到首页
       return new Response(null, {
         status: 303,
         headers: {
@@ -155,7 +168,7 @@ app.use('*', async (c, next) => {
     return loginPage(true)
   }
 
-  // ✅ GET 请求且未认证 → 显示登录页
+  // GET 请求且未认证 → 显示登录页
   return loginPage()
 })
 // ========== 网站入口密码保护结束 ==========
