@@ -1,3 +1,33 @@
+// worker/index.ts
+
+import { authMiddleware } from './auth';
+
+export default {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    // 1. 先执行认证中间件
+    const authResult = await authMiddleware(request);
+    
+    // 2. 如果中间件返回了响应（登录页、重定向等），直接返回它
+    if (authResult) {
+      return authResult;
+    }
+
+    // 3. 认证通过，继续执行原有的导航应用逻辑
+    // 以下是你的CF-Navs原有的代码，请保留不变
+    // ...
+    // 如果你不知道原本的代码在哪里，在文件底部应该有一个类似这样的处理：
+    // return app.fetch(request, env, ctx);
+    // 或者直接调用原有的路由处理函数
+    
+    // 示例（请替换为你项目实际的路由处理）：
+    // return handleRequest(request, env, ctx);
+    
+    // 如果文件里已经有app.fetch，就这样：
+    // return app.fetch(request, env, ctx);
+    
+    // 如果你找不到原逻辑，请把整个文件的代码贴出来，我帮你定位
+  },
+};
 import { Hono } from 'hono'
 import { ErrCode } from '../shared/types'
 import { withAssetCacheHeaders } from './lib/assetHeaders'
